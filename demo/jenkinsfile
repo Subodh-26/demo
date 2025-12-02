@@ -1,0 +1,91 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_USER = "subodhxo"
+        IMAGE_NAME  = "demo-app"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout([$class: 'GitSCM',
+                    branches: [[name: '*/main']],
+                    userRemoteConfigs: [[url: 'https://github.com/Subodh-26/demo.git']]
+                ])
+            }
+        }
+
+        stage('Maven Build') {
+            steps {
+                dir('demo') {
+                    bat "mvn clean package -DskipTests"
+                }
+            }
+        }
+
+        stage('Capture Artifacts') {
+            steps {
+                dir('demo') {
+                    archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                    junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                dir('demo') {
+                    bat """
+                    echo Building Docker image...
+                    docker build -t %DOCKER_USER%/%IMAGE_NAME%:latest .
+                    """
+                }
+            }
+        }
+
+        stage('Docker Login') {
+            steps {
+                withCredentials([string(credentialsId: 'dockerhub-pass', variable: 'DOCKER_HUB_PASSWORD')]) {
+                    bat """
+                    echo Logging into Docker Hub...
+                    echo %DOCKER_HUB_PASSWORD% | docker login -u %DOCKER_USER% --password-stdin
+                    """
+                }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                bat """
+                docker push %DOCKER_USER%/%IMAGE_NAME%:latest
+                """
+            }
+        }
+
+        stage('Docker Deploy') {
+            steps {
+                bat """
+                docker stop demo-app || echo Not running
+                docker rm demo-app || echo No container
+
+                echo Starting new container...
+                docker run -d --name demo-app -p 8081:8080 %DOCKER_USER%/%IMAGE_NAME%:latest
+                """
+            }
+        }
+    }
+
+    post {
+        always {
+            cleanWs()
+        }
+        success {
+            echo "PIPELINE SUCCESSFUL!"
+        }
+        failure {
+            echo "PIPELINE FAILED!"
+        }
+    }
+}
